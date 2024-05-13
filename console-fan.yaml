@@ -38,7 +38,7 @@ wifi:
 
 switch:
   - platform: gpio
-    name: "fan_relay"
+    name: "Switch"
     id: fan_relay
     pin: GPIO10
     internal: true
