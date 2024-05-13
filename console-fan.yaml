@@ -35,6 +35,14 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
 
+
+switch:
+  - platform: gpio
+    name: "fan_relay"
+    id: fan_relay
+    pin: GPIO10
+    internal: true
+
 number:
 
   ## OPTIONAL:
@@ -116,67 +124,51 @@ number:
     set_action: 
       lambda: id(console_thermostat).set_ki_multiplier( x );
 
-text_sensor:
-
-  # Send IP Address
-  - platform: wifi_info
-    ip_address:
-      name: $friendly_name IP Address
-
-  # Send Uptime in raw seconds
-  - platform: template
-    name: $friendly_name Uptime
-    id: uptime_human
-    icon: mdi:clock-start
-
 sensor:
+  - platform: dht
+    pin: GPIO1
+    model: DHT22
+    temperature:
+      name: "it-schrank-temperatur"
+      id: "console_fan_temperature"
+      
+      accuracy_decimals: 3
 
-  # Send WiFi signal strength & uptime to HA
-  - platform: wifi_signal
-    name: $friendly_name WiFi Strength
-    update_interval: 60s
-
-  # This is a bit of overkill. It sends a human readable 
-  # uptime string 1h 41m 32s instead of 6092 seconds
-  - platform: uptime
-    name: $friendly_name Uptime
-    id: uptime_sensor
-    update_interval: 60s
-    on_raw_value:
-      then:
-        - text_sensor.template.publish:
-            id: uptime_human
-            # Custom C++ code to generate the result
-            state: !lambda |-
-              int seconds = round(id(uptime_sensor).raw_state);
-              int days = seconds / (24 * 3600);
-              seconds = seconds % (24 * 3600);
-              int hours = seconds / 3600;
-              seconds = seconds % 3600;
-              int minutes = seconds /  60;
-              seconds = seconds % 60;
-              return (
-                (days ? to_string(days) + "d " : "") +
-                (hours ? to_string(hours) + "h " : "") +
-                (minutes ? to_string(minutes) + "m " : "") +
-                (to_string(seconds) + "s")
-              ).c_str();
-
-  # Read the Tacho PIN and show measured RPM as a sensor (only with 4-pin PWM fans!)
-
+      # If you don't smooth the temperature readings 
+      # the PID controller over reacts to small changes.
+      filters:
+        - exponential_moving_average:  
+            alpha: 0.1
+            send_every: 1
+    humidity:
+      name: "it-schrank-luftfeuchtigkeit"
+      id: "console_fan_humidity"
+    update_interval: 2s
+  
   - platform: pulse_counter
     pin: 
-      number: GPIO25   # Connect to any input PIN on the ESP
+      number: GPIO07   # Connect to any input PIN on the ESP
       mode: INPUT_PULLUP
     unit_of_measurement: 'RPM'
     id: fan_speed
     name: $friendly_name Fan Speed
     accuracy_decimals: 0
     filters:
-      - multiply: 0.5  # Depending on how many pulses the fan sends per round - should be 0.5 or 1 - try...
+      - multiply: 0.5
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: DISABLE
+    update_interval: 3s
+  
+  # Every time the fan speed is updated, this sensor will
+  # also be updated for displaying on the frontend. 
+  # See proxy_output.
+  - platform: template
+    name: "Fan Speed (PWM Voltage)"
+    unit_of_measurement: "%"
+    id: fan_speed_pwm_voltage
 
-
-########################################################
+  ########################################################
 # START THE FAN CONTROLLER SETUP
 
   - platform: template
@@ -213,55 +205,18 @@ sensor:
     id: in_deadband_term
     accuracy_decimals: 0
 
-  # GET TEMP/HUMIDITY FROM DHT11
-  - platform: dht
-    pin: GPIO33
-    temperature:
-      name: "Temperature"
-      id: console_fan_temperature
-      accuracy_decimals: 3
-
-      # If you don't smooth the temperature readings 
-      # the PID controller over reacts to small changes.
-      filters:
-         - exponential_moving_average:  
-             alpha: 0.1
-             send_every: 1
-
-    humidity:
-      name: "Humidity"
-      id: console_fan_humidity
-
-    # the DHT11 can only be read every 1s. Use 1.3s to be safe.
-    update_interval: 1.3s
-
-  # Every time the fan speed is updated, this sensor will
-  # also be updated for displaying on the frontend. 
-  # See proxy_output.
-  - platform: template
-    name: "Fan Speed (PWM Voltage)"
-    unit_of_measurement: "%"
-    id: fan_speed_pwm_voltage
-
 output:
-  # Wire this pin (13) into the PWM pin of your 12v fan
-  # ledc is the name of the pwm output system on an esp32
   - platform: ledc
     id: console_fan_speed
-    pin: GPIO13
+    pin: GPIO5
 
-    # 25KHz is standard PC fan frequency, minimises buzzing
-    frequency: "25000 Hz" 
-
-    # my fans stop working below 13% powerful.
-    # also they're  powerful and loud, cap their max speed to 80%
-    min_power: 13%
-    max_power: 80%
+    # 25KHz is standard PWM PC fan frequency, minimises buzzing
+    frequency: "25000 Hz"
 
     # At 0, actually turn it off, otherwise the power keeps going.
     zero_means_zero: true
 
-  # This proxy output takes its input
+# This proxy output takes its input
   # if the manual fan control is on, use the level from that
   # otherwise use the PID control value.
   # Then publish the result to the fan (ledc) and 
@@ -278,6 +233,7 @@ output:
         id(console_fan_speed).set_level(write_val);
         id(fan_speed_pwm_voltage).publish_state(write_val*100.0);
 
+
 # If you turn this on, you can manually set the fan speed.
 # The PID will be ignored. This is done via the proxy_output.
 fan:
@@ -285,6 +241,10 @@ fan:
     id: manual_fan_control
     output: proxy_output
     name: "Manual Fan Speed"
+    on_turn_on:
+    - switch.turn_on: fan_relay
+    on_turn_off:
+    - switch.turn_off: fan_relay
 
 # Expose a PID-controlled Thermostat
 # Manual: https://esphome.io/components/climate/pid.html
@@ -320,18 +280,27 @@ climate:
       - sensor.template.publish:
           id: e_term
           state: !lambda 'return -id(console_thermostat).get_error_value();'
+      - lambda: |-
+          if(id(console_thermostat).action==CLIMATE_ACTION_OFF || id(console_thermostat).action==CLIMATE_ACTION_IDLE && id(manual_fan_control).state!=true)
+            id(fan_relay).turn_off();
+      - lambda: |-
+          if(id(console_thermostat).action==CLIMATE_ACTION_COOLING)
+            id(fan_relay).turn_on();
+
+      
+
         
     # The extents of the HA Thermostat
     visual:
-      min_temperature: 20 °C
-      max_temperature: 50 °C
+      min_temperature: 15 °C
+      max_temperature: 45 °C
   
     # See the README for setting up these parameters.
     # These are over ridden by the number templates above.
     control_parameters:
-      kp: 0.3
-      ki: 0.0015
-      kd: 0
+      kp: 0.9226
+      ki: 0.0034
+      kd: 50.000
       max_integral: 0.0
       output_averaging_samples: 1
       derivative_averaging_samples: 5
@@ -344,26 +313,6 @@ climate:
       ki_multiplier: 0.04
       kd_multiplier: 0.0
       deadband_output_averaging_samples: 15
-
-switch:
-  # Expose an ESP32 restart button to HA
-  - platform: restart
-    name: ${friendly_name} ESP32 Restart
-    id: console_fan_restart
-
-# Restart every day at 12:30am. 
-# I've had some memory issues lockup 
-# the device after a couple weeks
-time:
-  - platform: homeassistant
-    on_time:
-      # Every morning at 12:30am
-    - seconds: 0
-      minutes: 30
-      hours: 0
-      then:
-       - switch.turn_on: console_fan_restart
-
 
 # I was able to find good KP,KI,KD values manually, per the instructions,
 # but you can try pressing the autotune button from home assistant and copying the 
