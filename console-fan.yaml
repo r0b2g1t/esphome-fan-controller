@@ -129,7 +129,7 @@ sensor:
     pin: GPIO1
     model: DHT22
     temperature:
-      name: "it-schrank-temperatur"
+      name: "Temperature"
       id: "console_fan_temperature"
       
       accuracy_decimals: 3
@@ -141,7 +141,7 @@ sensor:
             alpha: 0.1
             send_every: 1
     humidity:
-      name: "it-schrank-luftfeuchtigkeit"
+      name: "Humidity"
       id: "console_fan_humidity"
     update_interval: 2s
   
