@@ -13,9 +13,9 @@ preferences:
 # ESP32 AND NETWORK SETUP
 
 esp32:
-  board: nodemcu-32s
+  board: esp32-c3-devkitm-1
   framework:
-    type: arduino
+    type: esp-idf
 
 # pid climate log update is noisy, dial it back to warn
 logger:
@@ -27,6 +27,7 @@ logger:
 # default HA integration, OTA updater and backup http web portal
 api:
 ota:
+  - platform: esphome
 wifi:
 
   # Read the wifi/pass from secrets.yaml:
@@ -60,6 +61,7 @@ number:
     min_value: 0
     max_value: 50
     step: 0.001
+    optimistic: true
     set_action: 
       lambda: |- 
         id(console_thermostat).set_kp( x );
@@ -73,6 +75,7 @@ number:
     min_value: 0
     max_value: 50
     step: 0.0001
+    optimistic: true
     set_action: 
       lambda: id(console_thermostat).set_ki( x );
 
@@ -85,6 +88,7 @@ number:
     min_value: -50
     max_value: 50
     step: 0.001
+    optimistic: true
     set_action: 
       lambda: id(console_thermostat).set_kd( x );
 
@@ -97,6 +101,7 @@ number:
     min_value: -20
     max_value: 0
     step: 0.1
+    optimistic: true
     set_action: 
       lambda: id(console_thermostat).set_threshold_low( x );
 
@@ -109,6 +114,7 @@ number:
     min_value: 0
     max_value: 20
     step: 0.1
+    optimistic: true
     set_action: 
       lambda: id(console_thermostat).set_threshold_high( x );
 
@@ -121,6 +127,7 @@ number:
     min_value: 0
     max_value: .2
     step: 0.01
+    optimistic: true
     set_action: 
       lambda: id(console_thermostat).set_ki_multiplier( x );
 
@@ -228,8 +235,7 @@ output:
       lambda: |-
         float write_val = 
           (id(manual_fan_control).state) ?
-            id(manual_fan_control).speed / 100.0:
-            write_val = state*1.0;
+            id(manual_fan_control).speed / 100.0 : state*1.0;
         id(console_fan_speed).set_level(write_val);
         id(fan_speed_pwm_voltage).publish_state(write_val*100.0);
 
